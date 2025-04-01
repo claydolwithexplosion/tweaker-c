@@ -20,15 +20,15 @@ int main(void)
 				break;
 				case OP_ADC:
 					if (i == 0)
-						printf("movs ");
+						printf("movs\t");
 					else
-						printf("adc ");
+						printf("adc\t");
 				break;
 				case OP_SBC:
 					if (i == 0)
-						printf("mvn ");
+						printf("mvn\t");
 					else
-						printf("sbc ");
+						printf("sbc\t");
 				break;
 			}
 			printf("#0x%08x", instr.value);
