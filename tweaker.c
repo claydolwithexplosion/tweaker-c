@@ -85,11 +85,17 @@ struct instruction_sequence tweak(int reg, uint32_t base, uint32_t target)
 	/* Greedily search for a solution */
 	for (int i = 0; i < MAX_DEPTH; i += 1) {
 		res.length = i + 1;
-		if (approx(i, &res, target - base, rot_imms, rot_imms_len, OP_ADC))
-			break;
-		if (approx(i, &res, base - target, rot_imms, rot_imms_len, OP_SBC))
-			break;
+		for (unsigned u = 0; u < rot_imms_len; u += 1) {
+			uint32_t imm = rot_imms[u];
+			res.instr[i] = (struct instruction) {imm, OP_ADC};
+			if (approx(i - 1, &res, (target - base) - imm, rot_imms, rot_imms_len, OP_ADC))
+				goto exit;
+			res.instr[i] = (struct instruction) {imm, OP_SBC};
+			if (approx(i - 1, &res, (base - target) - (imm+1), rot_imms, rot_imms_len, OP_SBC))
+				goto exit;
+		}
 	}
+exit:
 	/* Reverse the instructions */
 	for (unsigned u = 0; u < res.length / 2; u += 1) {
 		struct instruction tmp = res.instr[u];
