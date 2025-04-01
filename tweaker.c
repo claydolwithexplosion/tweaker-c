@@ -1,6 +1,6 @@
 #include "tweaker.h"
 
-static int32_t base_imms[] = {
+static uint32_t base_imms[] = {
 	0x00,
 	0xA1,0xA2,0xA3,0xA4,0xA5,0xA6,0xA7,0xA8,0xA9,0xAA,0xAB,0xAC,0xAD,0xAE,
 	0xB0,0xB1,0xB2,0xB3,0xB4,0xB5,0xB6,0xB8,0xBA,0xBB,0xBC,0xBD,0xBE,0xBF,
@@ -9,6 +9,11 @@ static int32_t base_imms[] = {
 	0xE0,0xE1,0xE2,0xE3,0xE4,0xE5,0xE6,0xE7,0xE8,0xE9,0xEA,0xEB,0xEC,0xED,0xEE,
 	// 0xFF,
 };
+static struct cache {
+	uint32_t values[MAX_ROT_IMMS];
+	unsigned length;
+	unsigned initialized;
+} rot_imms[16];
 
 static int approx(int depth, struct instruction_sequence *seq, uint32_t remainder, uint32_t *imms, int imms_len, enum operation op)
 {
@@ -17,9 +22,19 @@ static int approx(int depth, struct instruction_sequence *seq, uint32_t remainde
 	uint32_t incr = (op == OP_SBC ? 1 : (op == OP_ADC ? 0 : -1));
 
 	/* Replaces remove_while */
-	int u = 1;
-	while (u < imms_len && imms[u] + incr > remainder)
-		u += 1;
+	int u = 1, v = imms_len - 1;
+	/*while (u < imms_len && imms[u] + incr > remainder)
+		u += 1;*/
+	while (u <= v) {
+		unsigned w = u + (v - u) / 2;
+		if (imms[w] + incr == remainder) {
+			break;
+		} else if (imms[w] + incr > remainder) {
+			u = w + 1;
+		} else if (imms[w] + incr < remainder) {
+			v = w - 1;
+		}
+	}
 	if (u >= imms_len)
 		return FALSE;
 
@@ -50,48 +65,50 @@ static int approx(int depth, struct instruction_sequence *seq, uint32_t remainde
 struct instruction_sequence tweak(int reg, uint32_t base, uint32_t target)
 {
 	struct instruction_sequence res = {{}, 0};
-	uint32_t rot_imms[MAX_ROT_IMMS];
-	unsigned rot_imms_len = 0;
+	struct cache *cache = &rot_imms[reg];
 
-	for (unsigned u = 0; u < sizeof(base_imms) / sizeof(*base_imms); u += 1) {
-		/* Search for valid rotations given our register */
-		int32_t cand = base_imms[u];
-		if ((cand >> 4) == reg) {
-			int32_t rotate = (cand & 0x0f) * 2;
-			for (unsigned v = 0; v < sizeof(base_imms) / sizeof(*base_imms); v += 1) {
-				uint32_t base = base_imms[v];
-				uint32_t rotated = (base >> rotate) | (base << (32 - rotate));
-				if (rot_imms_len < MAX_ROT_IMMS) {
-					rot_imms[rot_imms_len] = rotated;
-					rot_imms_len += 1;
-				} else {
-					/* Something must have seriously gone wrong, please increase MAX_ROT_IMMS */
-					return res;
+	if (!cache->initialized) {
+		for (unsigned u = 0; u < sizeof(base_imms) / sizeof(*base_imms); u += 1) {
+			/* Search for valid rotations given our register */
+			int32_t cand = base_imms[u];
+			if ((cand >> 4) == reg) {
+				int32_t rotate = (cand & 0x0f) * 2;
+				for (unsigned v = 0; v < sizeof(base_imms) / sizeof(*base_imms); v += 1) {
+					uint32_t base = base_imms[v];
+					uint32_t rotated = (base >> rotate) | (base << (32 - rotate));
+					if (cache->length < MAX_ROT_IMMS) {
+						cache->values[cache->length] = rotated;
+						cache->length += 1;
+					} else {
+						/* Something must have seriously gone wrong, please increase MAX_ROT_IMMS */
+						return res;
+					}
 				}
 			}
 		}
-	}
-	/* Dumb sort */
-	for (unsigned i = 0; i < rot_imms_len; i += 1) {
-		for (unsigned j = 0; j < rot_imms_len; j += 1) {
-			if (rot_imms[i] > rot_imms[j]) {
-				/* Swap */
-				uint32_t tmp = rot_imms[i];
-				rot_imms[i] = rot_imms[j];
-				rot_imms[j] = tmp;
+		/* Dumb sort */
+		for (unsigned i = 0; i < cache->length; i += 1) {
+			for (unsigned j = 0; j < cache->length; j += 1) {
+				if (cache->values[i] > cache->values[j]) {
+					/* Swap */
+					uint32_t tmp = cache->values[i];
+					cache->values[i] = cache->values[j];
+					cache->values[j] = tmp;
+				}
 			}
 		}
+		cache->initialized = TRUE;
 	}
 	/* Greedily search for a solution */
 	for (int i = 0; i < MAX_DEPTH; i += 1) {
 		res.length = i + 1;
-		for (unsigned u = 0; u < rot_imms_len; u += 1) {
-			uint32_t imm = rot_imms[u];
+		for (unsigned u = 0; u < cache->length; u += 1) {
+			uint32_t imm = cache->values[u];
 			res.instr[i] = (struct instruction) {imm, OP_ADC};
-			if (approx(i - 1, &res, (target - base) - imm, rot_imms, rot_imms_len, OP_ADC))
+			if (approx(i - 1, &res, (target - base) - imm, cache->values, cache->length, OP_ADC))
 				goto exit;
 			res.instr[i] = (struct instruction) {imm, OP_SBC};
-			if (approx(i - 1, &res, (base - target) - (imm+1), rot_imms, rot_imms_len, OP_SBC))
+			if (approx(i - 1, &res, (base - target) - (imm+1), cache->values, cache->length, OP_SBC))
 				goto exit;
 		}
 	}
